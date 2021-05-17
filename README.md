@@ -67,6 +67,12 @@ Equivalently, you can embed options in test files themselves:
 - `ARGS: <arguments>`. Add arguments to a configured command (see below).
 - `RETURN: <code>`. The expected exit status.
 
+Alternatively, the TOML file can specify the individual command statement parts separately as:
+
+- `command_dir`: The directory to find the executable
+- `command_exec`: The executable
+- `command_args`: The executable's arguments
+
 In commands and filenames, you can use certain patterns that get substituted with details about the tests:
 
 - `{filename}`: The name of the test file (without the directory part).
@@ -95,6 +101,7 @@ These are the command-line options:
 - `--print` or `-p`: Instead of checking test results, just run the command and show the output directly. This can be useful (especially in combination with `-v`) when iterating on a test interactively.
 - `--args` or `-a`: Override the `args` string that gets interpolated into commands, which normally comes from in-file comments.
 - `--config` or `-c`: Look for this config filename instead of the default `turnt.toml`.
+- `--command_dir` or `-D`: Override the directory path to the executable to run
 
 
 TAP

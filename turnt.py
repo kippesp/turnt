@@ -28,7 +28,19 @@ def load_config(path, config_name):
     config_path = os.path.join(parent, config_name)
     if os.path.isfile(config_path):
         with open(config_path) as f:
-            return tomlkit.loads(f.read())
+            config = tomlkit.loads(f.read())
+
+            # Support separated command in TOML config
+            if all(key in config for key in ('command_dir', 'command_exec',
+                                             'command_args')):
+                command = os.path.join(config['command_dir'],
+                                       config['command_exec'])
+                command += ' ' + config['command_args']
+                config['command'] = command
+                del config['command_dir']
+                del config['command_exec']
+                del config['command_args']
+            return config
     else:
         return {}
 
@@ -57,7 +69,7 @@ def extract_single_option(text, key):
         return None
 
 
-def get_command(config, path, contents, args=None, err=None):
+def get_command(config, path, contents, args=None, command_dir=None):
     """Get the shell command to run for a given test, as a string.
     """
     cmd = extract_single_option(contents, 'cmd') or config['command']
@@ -66,12 +78,20 @@ def get_command(config, path, contents, args=None, err=None):
     # Construct the command.
     filename = os.path.basename(path)
     base, _ = os.path.splitext(filename)
-    return cmd.format(
+    exec_cmd = cmd.format(
         filename=shlex.quote(filename),
         base=shlex.quote(base),
         args=args,
     )
-
+    # Override directory of executable
+    if command_dir:
+        cmd_parts = exec_cmd.split(' ')
+        cmd_exe = os.path.basename(os.path.abspath(cmd_parts[0]))
+        cmd_path = os.path.join(command_dir, cmd_exe)
+        exec_cmd = ' '.join([cmd_path] + cmd_parts[1:])
+        return exec_cmd
+    else:
+        return exec_cmd
 
 def format_output_path(name, path):
     """Substitute patterns in configured *actual* output filenames and
@@ -152,7 +172,7 @@ def get_return_code(config, contents):
         return 0
 
 
-def load_options(config, path, args=None):
+def load_options(config, path, args=None, command_dir=None):
     """Extract the options embedded in the test file, which can override
     the options in the configuration. Return the test command and an
     output file mapping.
@@ -162,6 +182,9 @@ def load_options(config, path, args=None):
 
     `args` can override the arguments for the command, which otherwise
     come from the file itself.
+
+    `command_dir` can override (or specify) the directory to find the
+    command to execute.
     """
     # Load the contents for option parsing either from the file itself
     # or, if the test is a directory, from a file contained therein.
@@ -180,7 +203,7 @@ def load_options(config, path, args=None):
             contents = ''
 
     return (
-        get_command(config, path, contents, args),
+        get_command(config, path, contents, args, command_dir),
         get_out_files(config, path, contents),
         get_return_code(config, contents),
     )
@@ -247,7 +270,8 @@ def check_result(name, idx, save, diff, proc, out_files, return_code,
     return not differing, [line]
 
 
-def run_test(path, config_name, idx, save, diff, verbose, dump, args=None):
+def run_test(path, config_name, idx, save, diff, verbose, dump, args=None,
+             command_dir=None):
     """Run a single test.
 
     Check the output and produce a TAP summary line, unless `dump` is
@@ -255,7 +279,7 @@ def run_test(path, config_name, idx, save, diff, verbose, dump, args=None):
     indicating success and the message as a list of strings.
     """
     config = load_config(path, config_name)
-    cmd, out_files, return_code = load_options(config, path, args)
+    cmd, out_files, return_code = load_options(config, path, args, command_dir)
     diff_cmd = shlex.split(config.get('diff', DIFF_DEFAULT))
 
     # Show the command if we're dumping the output.
@@ -316,12 +340,14 @@ def cli():
               help='Do not suppress stderr from successful commands.')
 @click.option('-a', '--args',
               help='Override arguments for test commands.')
+@click.option('-D', '--command_dir',
+              help='Override/specify directory to find exec command.')
 @click.option('-j', '--parallel', is_flag=True, default=False,
               help='Run tests in parallel.')
 @click.option('-c', '--config', default='turnt.toml',
               help='Name of the config file. Default: turnt.toml')
 @click.argument('file', nargs=-1, type=click.Path(exists=True))
-def turnt(file, save, diff, verbose, dump, args, parallel, config):
+def turnt(file, save, diff, verbose, dump, args, command_dir, parallel, config):
     if file and not dump:
         print('1..{}'.format(len(file)))
 
@@ -333,7 +359,7 @@ def turnt(file, save, diff, verbose, dump, args, parallel, config):
             for idx, path in enumerate(file):
                 futs.append(pool.submit(
                     run_test,
-                    path, config, idx + 1, save, diff, verbose, dump, args
+                    path, config, idx + 1, save, diff, verbose, dump, args, command_dir
                 ))
             for fut in futs:
                 sc, msg = fut.result()
@@ -344,7 +370,8 @@ def turnt(file, save, diff, verbose, dump, args, parallel, config):
     else:
         # Simple sequential loop.
         for idx, path in enumerate(file):
-            sc, msg = run_test(path, config, idx + 1, save, diff, verbose, dump, args)
+            sc, msg = run_test(path, config, idx + 1, save, diff, verbose, dump, args,
+                               command_dir)
             success &= sc
             for line in msg:
                 print(line)
